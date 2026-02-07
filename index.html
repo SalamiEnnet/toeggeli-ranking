@@ -15,37 +15,62 @@
     label { font-size: 12px; color:#444; display:block; margin-bottom: 4px; }
     input { width: 100%; padding: 12px; border:1px solid #ddd; border-radius: 10px; font-size: 16px; }
     button { width:100%; padding: 12px; border:0; border-radius: 10px; font-size: 16px; background:#111; color:#fff; cursor:pointer; }
+    button.secondary { background:#fff; color:#111; border:1px solid #ddd; }
     button:disabled { opacity: .5; cursor:not-allowed; }
     table { width:100%; border-collapse: collapse; }
     th, td { padding: 10px; border-bottom:1px solid #eee; text-align:left; font-size: 14px; }
     th { cursor: pointer; user-select:none; white-space:nowrap; }
     .muted { color:#666; font-size: 12px; }
-    .row { display:flex; gap:10px; }
+    .row { display:flex; gap:10px; align-items: end; }
     .row > div { flex: 1; }
     .suggest { position:relative; }
     .suggest-list { position:absolute; left:0; right:0; top: 74px; background:#fff; border:1px solid #ddd; border-radius: 10px; max-height: 220px; overflow:auto; z-index: 9; }
-    .suggest-item { padding: 10px; border-bottom:1px solid #eee; }
+    .suggest-item { padding: 10px; border-bottom:1px solid #eee; display:flex; justify-content:space-between; gap:10px; }
     .suggest-item:last-child { border-bottom:0; }
     .suggest-item:hover { background:#f3f4f6; cursor:pointer; }
     .pill { display:inline-block; padding: 2px 8px; border-radius: 999px; background:#f1f1f1; font-size:12px; }
+    .ok { color:#0a7a2f; }
+    .bad { color:#b00020; }
   </style>
 </head>
 <body>
 <div class="wrap">
+
+  <!-- Spieler registrieren -->
+  <div class="card">
+    <h1>Neuen Spieler anmelden</h1>
+    <div class="row">
+      <div>
+        <label>Spielername</label>
+        <input id="new_player" placeholder="z. B. Nina Meier" autocomplete="off" />
+        <div class="muted" id="new_player_hint" style="margin-top:6px"></div>
+      </div>
+      <div style="flex:0.7">
+        <button id="btn_register" class="secondary">Spieler registrieren</button>
+      </div>
+    </div>
+    <div class="muted" id="register_status" style="margin-top:8px"></div>
+  </div>
+
+  <!-- Spiel eintragen -->
   <div class="card">
     <h1>Spiel eintragen (2 vs. 2)</h1>
-    <div class="grid grid-2">
+    <div class="muted">Du musst jeden Spieler aus der Liste anklicken (nur registrierte Spieler).</div>
+
+    <div class="grid grid-2" style="margin-top:10px">
       <div>
         <div class="row">
           <div class="suggest">
             <label>Team 1 – Spieler A</label>
             <input id="p1" placeholder="Name tippen…" autocomplete="off" />
             <div class="suggest-list" id="p1_s" style="display:none"></div>
+            <div class="muted" id="p1_ok" style="margin-top:6px"></div>
           </div>
           <div class="suggest">
             <label>Team 1 – Spieler B</label>
             <input id="p2" placeholder="Name tippen…" autocomplete="off" />
             <div class="suggest-list" id="p2_s" style="display:none"></div>
+            <div class="muted" id="p2_ok" style="margin-top:6px"></div>
           </div>
         </div>
       </div>
@@ -55,11 +80,13 @@
             <label>Team 2 – Spieler C</label>
             <input id="p3" placeholder="Name tippen…" autocomplete="off" />
             <div class="suggest-list" id="p3_s" style="display:none"></div>
+            <div class="muted" id="p3_ok" style="margin-top:6px"></div>
           </div>
           <div class="suggest">
             <label>Team 2 – Spieler D</label>
             <input id="p4" placeholder="Name tippen…" autocomplete="off" />
             <div class="suggest-list" id="p4_s" style="display:none"></div>
+            <div class="muted" id="p4_ok" style="margin-top:6px"></div>
           </div>
         </div>
       </div>
@@ -117,8 +144,20 @@
   const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
   const els = {
+    // register
+    newPlayer: document.getElementById('new_player'),
+    newPlayerHint: document.getElementById('new_player_hint'),
+    btnRegister: document.getElementById('btn_register'),
+    registerStatus: document.getElementById('register_status'),
+
+    // match
     p1: document.getElementById('p1'), p2: document.getElementById('p2'),
     p3: document.getElementById('p3'), p4: document.getElementById('p4'),
+    p1ok: document.getElementById('p1_ok'),
+    p2ok: document.getElementById('p2_ok'),
+    p3ok: document.getElementById('p3_ok'),
+    p4ok: document.getElementById('p4_ok'),
+
     g1: document.getElementById('g1'), g2: document.getElementById('g2'),
     submit: document.getElementById('submit'),
     status: document.getElementById('status'),
@@ -128,9 +167,21 @@
   let sortKey = 'elo';
   let sortDir = 'desc';
 
+  // Pro Input merken wir uns: welcher Spieler wurde wirklich angeklickt?
+  const selected = new Map(); // key: inputId -> { id, name }
+
   function normName(s){ return (s || '').trim(); }
   function canon(s){ return normName(s).toLowerCase(); }
   function setStatus(msg){ els.status.textContent = msg || ''; }
+  function setRegisterStatus(msg){ els.registerStatus.textContent = msg || ''; }
+
+  function setPickHint(inputId, okEl, value){
+    if (value && value.id){
+      okEl.innerHTML = `<span class="ok">✓ ausgewählt: ${value.name}</span>`;
+    } else {
+      okEl.innerHTML = `<span class="bad">✕ bitte aus Liste auswählen</span>`;
+    }
+  }
 
   async function loadPlayers(){
     const { data, error } = await sb.from('players').select('*');
@@ -140,6 +191,15 @@
       win_pct: p.games > 0 ? Math.round((p.wins / p.games) * 1000) / 10 : 0,
       elo: Math.round(Number(p.elo) * 10) / 10
     }));
+
+    // Register-Hint aktualisieren
+    const typed = canon(els.newPlayer.value);
+    if (!typed) els.newPlayerHint.textContent = '';
+    else {
+      const exists = players.some(p => canon(p.name) === typed);
+      els.newPlayerHint.textContent = exists ? "Dieser Name ist bereits registriert." : "Noch nicht registriert.";
+    }
+
     renderTable();
   }
 
@@ -171,74 +231,125 @@
     }
   }
 
-  function attachSuggest(inputEl, listEl){
+  function invalidateSelection(inputEl, okEl){
+    selected.delete(inputEl.id);
+    setPickHint(inputEl.id, okEl, null);
+  }
+
+  function attachSuggestStrict(inputEl, listEl, okEl){
+    // Wenn User tippt: Auswahl wird ungültig, bis er wieder klickt.
     inputEl.addEventListener('input', ()=>{
+      invalidateSelection(inputEl, okEl);
+
       const q = canon(inputEl.value);
       if (!q){ listEl.style.display='none'; listEl.innerHTML=''; return; }
-      const matches = players.filter(p => canon(p.name).includes(q)).slice(0, 8);
+
+      const matches = players
+        .filter(p => canon(p.name).includes(q))
+        .sort((a,b)=> a.name.localeCompare(b.name))
+        .slice(0, 10);
+
       listEl.innerHTML = '';
       for (const m of matches){
         const div = document.createElement('div');
         div.className = 'suggest-item';
-        div.textContent = m.name;
-        div.onclick = ()=>{ inputEl.value = m.name; listEl.style.display='none'; };
+        div.innerHTML = `<span>${m.name}</span><span class="pill">Tippen</span>`;
+        div.onmousedown = (ev)=>{ ev.preventDefault(); }; // verhindert blur beim klicken
+        div.onclick = ()=>{
+          inputEl.value = m.name;
+          selected.set(inputEl.id, { id: m.id, name: m.name });
+          listEl.style.display='none';
+          setPickHint(inputEl.id, okEl, selected.get(inputEl.id));
+        };
         listEl.appendChild(div);
       }
       listEl.style.display = matches.length ? 'block' : 'none';
     });
+
     inputEl.addEventListener('blur', ()=> setTimeout(()=>{ listEl.style.display='none'; }, 150));
     inputEl.addEventListener('focus', ()=> inputEl.dispatchEvent(new Event('input')));
+
+    // Initial hint
+    setPickHint(inputEl.id, okEl, null);
   }
 
-  attachSuggest(els.p1, document.getElementById('p1_s'));
-  attachSuggest(els.p2, document.getElementById('p2_s'));
-  attachSuggest(els.p3, document.getElementById('p3_s'));
-  attachSuggest(els.p4, document.getElementById('p4_s'));
+  attachSuggestStrict(els.p1, document.getElementById('p1_s'), els.p1ok);
+  attachSuggestStrict(els.p2, document.getElementById('p2_s'), els.p2ok);
+  attachSuggestStrict(els.p3, document.getElementById('p3_s'), els.p3ok);
+  attachSuggestStrict(els.p4, document.getElementById('p4_s'), els.p4ok);
 
-  async function getOrCreatePlayerId(name){
-    const clean = normName(name);
-    if (!clean) throw new Error("Leerer Name");
-    const existing = players.find(p => canon(p.name) === canon(clean));
-    if (existing) return existing.id;
+  // Spieler registrieren: nur wenn noch nicht vorhanden
+  async function registerPlayer(){
+    try{
+      els.btnRegister.disabled = true;
+      setRegisterStatus("Speichern…");
 
-    const { data, error } = await sb.from('players').insert([{ name: clean }]).select().single();
-    if (error){
+      const name = normName(els.newPlayer.value);
+      if (!name) throw new Error("Bitte einen Spielernamen eingeben.");
+
+      const exists = players.some(p => canon(p.name) === canon(name));
+      if (exists) throw new Error("Dieser Spieler ist bereits registriert.");
+
+      const { error } = await sb.from('players').insert([{ name }]);
+      if (error) throw error;
+
+      els.newPlayer.value = '';
+      els.newPlayerHint.textContent = '';
+      setRegisterStatus("✅ Spieler registriert.");
       await loadPlayers();
-      const ex2 = players.find(p => canon(p.name) === canon(clean));
-      if (ex2) return ex2.id;
-      throw error;
+    } catch(e){
+      setRegisterStatus("❌ " + (e.message || String(e)));
+    } finally {
+      els.btnRegister.disabled = false;
     }
-    await loadPlayers();
-    return data.id;
   }
+
+  els.btnRegister.addEventListener('click', registerPlayer);
+  els.newPlayer.addEventListener('input', ()=>{
+    const typed = canon(els.newPlayer.value);
+    if (!typed){ els.newPlayerHint.textContent = ''; return; }
+    const exists = players.some(p => canon(p.name) === typed);
+    els.newPlayerHint.textContent = exists ? "Dieser Name ist bereits registriert." : "Noch nicht registriert.";
+  });
 
   async function submitMatch(){
     try{
       els.submit.disabled = true;
       setStatus("Speichern…");
 
-      const names = [els.p1.value, els.p2.value, els.p3.value, els.p4.value].map(normName);
-      if (names.some(n => !n)) throw new Error("Bitte alle 4 Spielernamen ausfüllen.");
+      // Strikte Auswahl: es muss pro Feld ein selected-Eintrag existieren
+      const pickIds = ['p1','p2','p3','p4'].map(id => selected.get(id));
+      if (pickIds.some(x => !x || !x.id)) throw new Error("Bitte alle 4 Spieler aus der Liste auswählen (anklicken).");
 
-      const c = names.map(canon);
-      if ((new Set(c)).size !== 4) throw new Error("Ein Spieler darf im gleichen Match nicht doppelt vorkommen.");
+      // Keine Doppelten
+      const ids = pickIds.map(x=>x.id);
+      if ((new Set(ids)).size !== 4) throw new Error("Ein Spieler darf im gleichen Match nicht doppelt vorkommen.");
 
       const g1 = Number(els.g1.value), g2 = Number(els.g2.value);
       if (!Number.isFinite(g1) || !Number.isFinite(g2) || g1 < 0 || g2 < 0) {
         throw new Error("Bitte ein gültiges Resultat eingeben (>= 0).");
       }
 
-      const [p1_id, p2_id, p3_id, p4_id] = await Promise.all(names.map(getOrCreatePlayerId));
+      const [p1_id, p2_id, p3_id, p4_id] = ids;
 
       const { error } = await sb.from('matches').insert([{
         p1_id, p2_id, p3_id, p4_id,
         team1_goals: g1,
         team2_goals: g2
       }]);
-
       if (error) throw error;
 
+      // Reset
       els.g1.value = ''; els.g2.value = '';
+      ['p1','p2','p3','p4'].forEach(id=>{
+        document.getElementById(id).value = '';
+        selected.delete(id);
+      });
+      setPickHint('p1', els.p1ok, null);
+      setPickHint('p2', els.p2ok, null);
+      setPickHint('p3', els.p3ok, null);
+      setPickHint('p4', els.p4ok, null);
+
       setStatus("✅ Gespeichert. Rangliste aktualisiert sich gleich.");
       await loadPlayers();
       await loadMonthStats();
@@ -296,7 +407,10 @@
       return { name: p ? p.name : ("#" + pid), ...s };
     });
 
-    function topBy(key){ return asRows.sort((a,b)=>b[key]-a[key])[0] || null; }
+    function topBy(key){
+      const sorted = [...asRows].sort((a,b)=>b[key]-a[key]);
+      return sorted[0] || null;
+    }
 
     const topGames = topBy('games');
     const topWins = topBy('wins');
