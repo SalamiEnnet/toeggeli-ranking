@@ -184,13 +184,70 @@
   }
 
   async function loadPlayers(){
-    const { data, error } = await sb.from('players').select('*');
-    if (error) { setStatus("Fehler beim Laden der Spieler: " + error.message); return; }
-    players = (data || []).map(p => ({
-      ...p,
-      win_pct: p.games > 0 ? Math.round((p.wins / p.games) * 1000) / 10 : 0,
-      elo: Math.round(Number(p.elo) * 10) / 10
-    }));
+  // 1) Spieler laden
+  const { data: pData, error: pErr } = await sb.from('players').select('id,name');
+  if (pErr) { setStatus("Fehler beim Laden der Spieler: " + pErr.message); return; }
+
+  // 2) Matches laden
+  const { data: mData, error: mErr } = await sb.from('matches').select('*');
+  if (mErr) { setStatus("Fehler beim Laden der Spiele: " + mErr.message); return; }
+
+  const pMap = new Map((pData || []).map(p => [p.id, p]));
+
+  // Stats initialisieren
+  const stat = new Map();
+  function ensure(pid){
+    if (!stat.has(pid)){
+      const p = pMap.get(pid);
+      stat.set(pid, {
+        id: pid,
+        name: p ? p.name : ("#" + pid),
+        games: 0,
+        wins: 0,
+        goals_for: 0,
+        goals_against: 0,
+        elo: 1000 // Startwert (falls du ELO später noch richtig rechnen willst)
+      });
+    }
+    return stat.get(pid);
+  }
+
+  // Matches aggregieren
+  for (const m of (mData || [])){
+    const t1g = Number(m.team1_goals) || 0;
+    const t2g = Number(m.team2_goals) || 0;
+    const t1w = t1g > t2g ? 1 : 0;
+    const t2w = t2g > t1g ? 1 : 0;
+
+    const team1 = [m.p1_id, m.p2_id];
+    const team2 = [m.p3_id, m.p4_id];
+
+    for (const pid of team1){
+      const s = ensure(pid);
+      s.games += 1;
+      s.wins += t1w;
+      s.goals_for += t1g;
+      s.goals_against += t2g;
+    }
+    for (const pid of team2){
+      const s = ensure(pid);
+      s.games += 1;
+      s.wins += t2w;
+      s.goals_for += t2g;
+      s.goals_against += t1g;
+    }
+  }
+
+  // Ausgabeformat wie vorher
+  players = [...stat.values()].map(p => ({
+    ...p,
+    win_pct: p.games > 0 ? Math.round((p.wins / p.games) * 1000) / 10 : 0,
+    elo: Math.round(Number(p.elo) * 10) / 10
+  }));
+
+  renderTable();
+}
+
 
     // Register-Hint aktualisieren
     const typed = canon(els.newPlayer.value);
